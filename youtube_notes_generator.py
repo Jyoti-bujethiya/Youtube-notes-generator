@@ -9,7 +9,7 @@ import json
 import requests
 from datetime import datetime
 
-# python3 youtube_notes_generator.py "https://www.youtube.com/watch?v=s9Qh9fWeOAk&t=444s" --api-key AIzaSyD5JceNWUWyozRCp-xcObzcbUzvuhkIR9s
+# python3 youtube_notes_generator.py "https://www.youtube.com/watch?v=hrgGf5HBOxA" --api-key AIzaSyD5JceNWUWyozRCp-xcObzcbUzvuhkIR9s
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -261,39 +261,12 @@ def extract_transcript(youtube_url, disable_ssl_verify=False):
         logger.error(f"All transcript extraction methods failed: {error_msg}")
         return {"error": f"Failed to extract transcript: {error_msg}"}
 
-def split_transcript_into_batches(transcript, batch_size=15000, overlap=1000):
-    """Split transcript into overlapping batches for processing"""
-    batches = []
-    start = 0
-
-    while start < len(transcript):
-        end = min(start + batch_size, len(transcript))
-
-        # If we're not at the end, try to break at a sentence
-        if end < len(transcript):
-            # Try to find a sentence end within the last 20% of the batch
-            search_start = max(start + int(batch_size * 0.8), start)
-            sentence_end = transcript.rfind('. ', search_start, end)
-            if sentence_end > search_start:
-                end = sentence_end + 1  # Include the period
-
-        batch = transcript[start:end]
-        batches.append(batch)
-
-        # Move start position for next batch, with overlap
-        if end == len(transcript):
-            break
-        start = max(0, end - overlap)
-
-    logger.info(f"Split transcript into {len(batches)} batches")
-    return batches
-
-def generate_batch_notes(batch, api_key, batch_number, total_batches):
-    """Generate notes for a single batch of transcript using Google AI Studio API"""
+def generate_detailed_notes(transcript, api_key, video_title):
+    """Generate detailed notes from the full transcript using Google AI Studio API"""
     try:
         # Create prompt for Google Gemini API
         prompt = f"""
-        Create structured notes from this transcript segment from a video (batch {batch_number} of {total_batches}). 
+        Create comprehensive, detailed notes from this YouTube video transcript. 
         Include:
         - Key points and concepts
         - Extra insights and explanations 
@@ -304,12 +277,14 @@ def generate_batch_notes(batch, api_key, batch_number, total_batches):
         
         Format with clear headings and bullet points. Be detailed yet concise.
         
+        Video Title: {video_title}
+        
         Transcript:
-        {batch}
+        {transcript}
         """
 
         # Generate notes with Google Gemini API
-        logger.info(f"Generating notes for batch {batch_number}/{total_batches}...")
+        logger.info("Generating detailed notes from transcript...")
         
         url = "https://generativelanguage.googleapis.com/v1/models/gemini-1.5-pro:generateContent"
         headers = {
@@ -329,7 +304,7 @@ def generate_batch_notes(batch, api_key, batch_number, total_batches):
             ],
             "generationConfig": {
                 "temperature": 0.7,
-                "maxOutputTokens": 2000
+                "maxOutputTokens": 4000
             }
         }
         
@@ -349,83 +324,12 @@ def generate_batch_notes(batch, api_key, batch_number, total_batches):
         else:
             generated_text = "Error: No candidates in response"
 
-        logger.info(f"Successfully generated notes for batch {batch_number}")
+        logger.info("Successfully generated detailed notes")
         return generated_text
 
     except Exception as e:
-        logger.error(f"Error generating notes for batch {batch_number}: {str(e)}")
-        return f"Failed to generate notes for segment {batch_number}: {str(e)}"
-
-def generate_summary(all_batch_notes, api_key, video_title):
-    """Generate a final summary based on all the batch notes"""
-    try:
-        # Combine all batch notes, but limit length to avoid context issues
-        combined_notes = "\n\n".join(all_batch_notes)
-        if len(combined_notes) > 20000:
-            combined_notes = combined_notes[:20000] + "... (notes truncated)"
-
-        # Create prompt for Google Gemini API
-        prompt = f"""
-        Create a comprehensive summary for a video titled "{video_title}" based on these notes from different segments.
-        Include:
-        1. A brief overview (1-2 paragraphs)
-        2. Key points and main topics
-        3. Practical applications
-        4. Common misconceptions
-        
-        Organize with clear headings. Be comprehensive yet concise.
-        
-        Notes:
-        {combined_notes}
-        """
-
-        # Generate summary with Google Gemini API
-        logger.info("Generating final summary from all batch notes...")
-        
-        url = "https://generativelanguage.googleapis.com/v1/models/gemini-1.5-pro:generateContent"
-        headers = {
-            "Content-Type": "application/json",
-            "x-goog-api-key": api_key
-        }
-        
-        data = {
-            "contents": [
-                {
-                    "parts": [
-                        {
-                            "text": prompt
-                        }
-                    ]
-                }
-            ],
-            "generationConfig": {
-                "temperature": 0.7,
-                "maxOutputTokens": 2500
-            }
-        }
-        
-        response = requests.post(url, headers=headers, data=json.dumps(data))
-        
-        if response.status_code != 200:
-            raise Exception(f"API request failed with status {response.status_code}: {response.text}")
-            
-        result = response.json()
-        
-        # Extract the generated text from the response
-        if "candidates" in result and len(result["candidates"]) > 0:
-            if "content" in result["candidates"][0] and "parts" in result["candidates"][0]["content"]:
-                generated_text = result["candidates"][0]["content"]["parts"][0]["text"]
-            else:
-                generated_text = "Error: Unexpected response format"
-        else:
-            generated_text = "Error: No candidates in response"
-
-        logger.info("Successfully generated final summary")
-        return generated_text
-
-    except Exception as e:
-        logger.error(f"Error generating final summary: {str(e)}")
-        return f"Failed to generate final summary: {str(e)}"
+        logger.error(f"Error generating notes: {str(e)}")
+        return f"Failed to generate notes: {str(e)}"
 
 def clean_llm_output(text):
     """Clean up the LLM output to remove typical artifacts"""
@@ -437,9 +341,6 @@ def clean_llm_output(text):
 
     # Remove transcript segment mentions
     text = re.sub(r'Transcript segment:', '', text)
-
-    # Remove batch references
-    text = re.sub(r'This is batch \d+ of \d+ from a video transcript\.', '', text)
 
     # Remove any markdown code blocks that might contain the original prompt
     text = re.sub(r'```.*?```', '', text, flags=re.DOTALL)
@@ -459,10 +360,6 @@ def main():
                         help='Disable SSL verification (use only if necessary)')
     parser.add_argument('--debug', action='store_true',
                         help='Enable debug logging')
-    parser.add_argument('--batch-size', type=int, default=15000,
-                        help='Size of transcript batches in characters (default: 15000)')
-    parser.add_argument('--overlap', type=int, default=1000,
-                        help='Overlap between batches in characters (default: 1000)')
     args = parser.parse_args()
 
     # Set debug logging if requested
@@ -511,26 +408,20 @@ def main():
     logger.info(f"Successfully extracted transcript ({len(transcript)} characters)")
     logger.info(f"Video: {video_info['title']} by {video_info['author']}")
 
-    # Split transcript into batches
-    batches = split_transcript_into_batches(transcript, args.batch_size, args.overlap)
+    # Check transcript length for potential token limits
+    if len(transcript) > 60000:
+        logger.warning(f"Transcript is very long ({len(transcript)} characters). The API may truncate it.")
+        # We could truncate here, but since we're handling the full transcript at once per the request,
+        # we'll let the API handle this and potentially truncate from the end.
 
-    # Process each batch
-    logger.info(f"\nStep 2: Generating notes for {len(batches)} transcript batches")
-    batch_notes = []
-    for i, batch in enumerate(batches):
-        notes = generate_batch_notes(batch, args.api_key, i+1, len(batches))
-        # Clean the notes to remove artifacts
-        cleaned_notes = clean_llm_output(notes)
-        batch_notes.append(cleaned_notes)
-
-    # Generate final summary
-    logger.info("\nStep 3: Generating final summary")
-    final_summary = generate_summary(batch_notes, args.api_key, video_info['title'])
-    # Clean the summary to remove artifacts
-    final_summary = clean_llm_output(final_summary)
+    # Generate detailed notes directly from the full transcript
+    logger.info("\nStep 2: Generating detailed notes from transcript")
+    detailed_notes = generate_detailed_notes(transcript, args.api_key, video_info['title'])
+    # Clean the notes to remove artifacts
+    detailed_notes = clean_llm_output(detailed_notes)
 
     # Create markdown file
-    logger.info(f"\nStep 4: Saving notes to {output_file}")
+    logger.info(f"\nStep 3: Saving notes to {output_file}")
     with open(output_file, 'w', encoding='utf-8') as f:
         f.write(f"# Notes: {video_info['title']}\n\n")
         f.write("## Video Information\n\n")
@@ -541,14 +432,8 @@ def main():
         if video_info['publish_date']:
             f.write(f"- **Published:** {video_info['publish_date']}\n")
         f.write(f"- **Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write("\n## Summary\n\n")
-        f.write(final_summary)
-
-        f.write("\n\n## Detailed Notes\n\n")
-        for i, notes in enumerate(batch_notes):
-            f.write(f"### Part {i+1}\n\n")
-            f.write(notes)
-            f.write("\n\n")
+        f.write("\n## Detailed Notes\n\n")
+        f.write(detailed_notes)
 
     logger.info(f"✅ Notes successfully generated and saved to {output_file}")
 
